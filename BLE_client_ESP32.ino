@@ -3,12 +3,12 @@
 #include <PubSubClient.h>
 #include <WifiLocation.h>
 
-//Command to start mosquitto: docker run -it --rm --name mosquitto -p 1883:1883 -v "$(pwd)/mosquitto/:/mosquitto/" eclipse-mosquitto
-
+//Command to start mosquitto with a configuration file placed in ./mosquitto/config folder: 
+// docker run -it --rm --name mosquitto -p 1883:1883 -v "$(pwd)/mosquitto/:/mosquitto/" eclipse-mosquitto
 
 /*--- MQTT AND WIFI CONFIGURATION ---*/
-const char* ssid = "wifi-id";
-const char* passwd = "wifi-pasword";
+const char* ssid = "wifi-network";
+const char* passwd = "wifi-password";
 const char* mqtt_server = "mqtt-server-address";
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -16,145 +16,87 @@ PubSubClient client(espClient);
 /*--- BLE CONFIGURATION ---*/
 static BLEUUID serviceUUID("9e3764f5-e264-4135-a2a9-70f5b8c8330e"); // People counter service
 static BLEUUID charUUID("3e715fb3-6d8d-442c-8ec6-a35ff777799c"); // Delta
-static BLEUUID serviceUUID2("8ae8d0e1-946a-4d8e-92fd-949c1f04d3e7"); // Bus stop sensor
-static BLEUUID charUUID2("707479d0-5a40-4775-bf9a-ed7cc3fc726e"); // Bus stop identifier
-static BLEUUID charUUID3("77962ccf-b032-4467-b03f-1bde4f9bcf71"); // Start analysis
+static BLEUUID charUUID2("77962ccf-b032-4467-b03f-1bde4f9bcf71"); // Start analysis
+static uint8_t stopService[10] = {0x94,0x29,0xAE,0xF4,0x48,0x98,0x24,0x9E,0x8F,0x6E}; // Bus stop sensors
+uint16_t beconUUID = 0xFEAA; // Eddystone beacon uuid
 
-
+// Struct that represents a BLE server
 typedef struct {
   BLEAdvertisedDevice* device;
+  BLERemoteCharacteristic* pRemoteCharacteristic;
+  BLERemoteCharacteristic* pRemoteCharacteristic2;
+  BLEClient*  pClient;
+  BLERemoteService* pRemoteService;
   boolean conn;
   int value;
 } server;
 
-//Servers that offer the service we are are looking for
+// Servers that offer the service we are are looking for
 server servers[10];
+// Index of the last added server
 int actual_server = 0;
+// Number of connected servers
 int connected_number = 0;
+// Number of servers that have communicated a value
 int values_number = 0;
+// Actual delta for the last stop
 int delta = 0;
+// Identifier of the last stop
 String actual_stop = "";
-static BLEAdvertisedDevice* bus_stop;
-static boolean doBusStop = false;
 
-
+// Flags
 static boolean doConnect = false;
-//static boolean connected = false;
-static boolean doScan = false;
-static BLERemoteCharacteristic* pRemoteCharacteristic;
-static BLERemoteCharacteristic* pRemoteCharacteristic2;
-static BLERemoteCharacteristic* pRemoteCharacteristic3;
+static boolean doAnalysis = false;
 
-const char* readStopId() {
-  // Reading the identifier of the actual stop
-  if(pRemoteCharacteristic2->canRead()) {
-    std::string value = pRemoteCharacteristic2->readValue();
-    const char* val = value.c_str();
-    Serial.print("The actual stop value is: ");
-    Serial.println(val);
-    actual_stop = val;
-  }
-}
-
-void startVideoAnalysis() {
-  // Starting the video analysis
-  String newValue = "1";
-  Serial.println("Setting new characteristic value to \"" + newValue + "\"");
-  int i = 0;
-  for (i=0; i<actual_server; i++) {
-    if (servers[i].conn == true) {
-      // Set the characteristic's value to be the array of bytes that is actually a string.
-      pRemoteCharacteristic3->writeValue(newValue.c_str(), newValue.length());
-    }
-  } 
-}
-
-bool connectToBusStop() {
-  //Connect to bus stop
-  Serial.print("Forming a connection to ");
-  Serial.println(bus_stop->getAddress().toString().c_str());
-  
-  BLEClient*  pClient  = BLEDevice::createClient();
-  Serial.println(" - Created client");
-  
-  // Connect to the remove BLE Server.
-  pClient->connect(bus_stop);  // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
-  Serial.println(" - Connected to server bus stop");
-
-  // Obtain a reference to the service we are after in the remote BLE server.
-  BLERemoteService* pRemoteService = pClient->getService(serviceUUID2);
-  if (pRemoteService == nullptr) {
-    Serial.print("Failed to find our service bus stop UUID: ");
-    Serial.println(serviceUUID2.toString().c_str());
-    pClient->disconnect();
-    return false;
-  }
-  Serial.println(" - Found our service bus stop");
-
-  // Obtain a reference to the characteristic in the service of the remote BLE server.
-  pRemoteCharacteristic2 = pRemoteService->getCharacteristic(charUUID2);
-  if (pRemoteCharacteristic2 == nullptr) {
-    Serial.print("Failed to find our characteristic bus stop UUID: ");
-    Serial.println(charUUID2.toString().c_str());
-    pClient->disconnect();
-    return false;
-  }
-  doBusStop = false;
-  return true;
-}
 
 //Connect to the servers
 bool connectToServers() {
   int i = 0;
   for (i=0; i<actual_server; i++) {
-    Serial.print("Forming a connection to ");
-    Serial.println(servers[i].device->getAddress().toString().c_str());
-    
-    BLEClient*  pClient  = BLEDevice::createClient();
-    Serial.println(" - Created client");
-
-    // Connect to the remove BLE Server.
-    pClient->connect(servers[i].device);  // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
-    Serial.println(" - Connected to server");
-
-    // Obtain a reference to the service we are after in the remote BLE server.
-    BLERemoteService* pRemoteService = pClient->getService(serviceUUID);
-    if (pRemoteService == nullptr) {
-      Serial.print("Failed to find our service UUID: ");
-      Serial.println(serviceUUID.toString().c_str());
-      pClient->disconnect();
-      return false;
+    if (servers[i].conn == false) {
+      Serial.print("Forming a connection to ");
+      Serial.println(servers[i].device->getAddress().toString().c_str());
+      
+      servers[i].pClient  = BLEDevice::createClient();
+      Serial.println(" - Created client");
+  
+      // Connect to the remove BLE Server.
+      servers[i].pClient->connect(servers[i].device);  // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
+      Serial.println(" - Connected to server");
+  
+      // Obtain a reference to the service we are after in the remote BLE server.
+      servers[i].pRemoteService = servers[i].pClient->getService(serviceUUID);
+      if (servers[i].pRemoteService == nullptr) {
+        Serial.print("Failed to find our service UUID: ");
+        Serial.println(serviceUUID.toString().c_str());
+        servers[i].pClient->disconnect();
+        return false;
+      }
+      Serial.println(" - Found our service");
+      // Obtain a reference to the characteristic in the service of the remote BLE server.
+      servers[i].pRemoteCharacteristic = servers[i].pRemoteService->getCharacteristic(charUUID);
+      if (servers[i].pRemoteCharacteristic == nullptr) {
+        Serial.print("Failed to find our characteristic UUID: ");
+        Serial.println(charUUID.toString().c_str());
+        servers[i].pClient->disconnect();
+        return false;
+      }
+      servers[i].pRemoteCharacteristic2 = servers[i].pRemoteService->getCharacteristic(charUUID2);
+      if (servers[i].pRemoteCharacteristic2 == nullptr) {
+        Serial.print("Failed to find our characteristic UUID: ");
+        Serial.println(charUUID2.toString().c_str());
+        servers[i].pClient->disconnect();
+        return false;
+      }
+      Serial.println(" - Found our characteristics");
+      servers[i].conn = true;
+      connected_number++;
     }
-    Serial.println(" - Found our service");
-
-
-    // Obtain a reference to the characteristic in the service of the remote BLE server.
-    pRemoteCharacteristic = pRemoteService->getCharacteristic(charUUID);
-    if (pRemoteCharacteristic == nullptr) {
-      Serial.print("Failed to find our characteristic UUID: ");
-      Serial.println(charUUID.toString().c_str());
-      pClient->disconnect();
-      return false;
-    }
-    pRemoteCharacteristic3 = pRemoteService->getCharacteristic(charUUID3);
-    if (pRemoteCharacteristic3 == nullptr) {
-      Serial.print("Failed to find our characteristic UUID: ");
-      Serial.println(charUUID.toString().c_str());
-      pClient->disconnect();
-      return false;
-    }
-    Serial.println(" - Found our characteristic");
-    /*
-    if(pRemoteCharacteristic->canNotify())
-      pRemoteCharacteristic->registerForNotify(notifyCallback);
-    */
-
-    servers[i].conn = true;
-    connected_number++;
   }
   return true;
 }
 
+// Check if a server is already saved
 int checkIfAlreadyPresent(BLEAdvertisedDevice* device) {
   int i = 0;
   for (i=0; i<actual_server; i++) {
@@ -163,17 +105,12 @@ int checkIfAlreadyPresent(BLEAdvertisedDevice* device) {
   return -1;
 }
 
-/**
- * Scan for BLE servers and find the first one that advertises the service we are looking for.
- */
+// Scan for the servers that offer the desired service or if we are at a bus stop
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
- /**
-   * Called for each advertising BLE server.
-   */
+  // Called for each advertised device
   void onResult(BLEAdvertisedDevice advertisedDevice) {
     Serial.print("BLE Advertised Device found: ");
     Serial.println(advertisedDevice.toString().c_str());
-
     // We have found a device, let us now see if it contains the service we are looking for.
     if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(serviceUUID)) {
       Serial.println("Found a server");
@@ -189,35 +126,49 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
         servers[actual_server].value = -100;
         actual_server = actual_server + 1;
         doConnect = true;
-        doScan = true;
       }
       //Trying to reconnect this device
       else if (servers[serverIndex].conn == false) {
         doConnect = true;
-        doScan = true;
       }
 
     } // Found our server
     // Check if we are at bus stop
-    else if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(serviceUUID2)) {
-      Serial.println("Found bus stop identifier");
-      BLEAdvertisedDevice* tmp = new BLEAdvertisedDevice(advertisedDevice);
-      if (bus_stop != NULL) {
-        if (bus_stop->getAddress().equals(tmp->getAddress())) {
-          Serial.println("Same bus stop");
-          //Do nothing
-        }
-        else {
-          Serial.println("New Bus Stop");
-          bus_stop = tmp;
-          doBusStop = true;
-        }
+    else if (advertisedDevice.getServiceDataUUID().equals(BLEUUID(beconUUID))==true) {  // found Eddystone UUID
+      std::string strServiceData = advertisedDevice.getServiceData();
+      uint8_t cServiceData[100];
+      strServiceData.copy((char *)cServiceData, strServiceData.length(), 0);
+      //Serial.printf("Eddystone: %d %s length %d\n", advertisedDevice.getServiceDataUUID().bitSize(), advertisedDevice.getServiceDataUUID().toString().c_str(),strServiceData.length());
+      //Get Service Data
+      boolean found = true;
+      int j = 0;
+      for (int i=2;i<12;i++) {
+        if (cServiceData[i] != stopService[j]) found = false;
+        j++;
       }
-      else {
-        bus_stop = tmp;
-        doBusStop = true;
-      }
-    } //Found bus stop
+      if (found == true) {
+        Serial.println("Found a bus stop");
+        String id = "";
+        // Instance id to know the identifier of the bus stop
+        String instanceId = "";
+        for (int i=2;i<12;i++) {
+          int number = cServiceData[i];
+          String n = String(number);
+          id = id + n;
+        }
+        for (int i=13;i<=strServiceData.length();i++) {
+          int number = cServiceData[i];
+          String n = String(number);
+          instanceId = instanceId + n;
+        }
+        Serial.println("Actual stop: " + instanceId);
+        if (instanceId != actual_stop) {
+          actual_stop = instanceId;
+          // Starting the video analysis
+          doAnalysis = true;
+        }
+      }//Found bus stop 
+    } //Found eddystone beacon
   } // onResult
 }; // MyAdvertisedDeviceCallbacks
 
@@ -272,6 +223,7 @@ void setup() {
 
   // MQTT
   client.setServer(mqtt_server, 1883);
+  //This is for received messages, not this case
 } // End of setup.
 
 // Set time via NTP, as required for x.509 validation
@@ -292,14 +244,7 @@ void setClock () {
   Serial.print (asctime (&timeinfo));
 }
 
-void checkIfConnected() {
-  int i = 0;
-  for (i=0; i<actual_server; i++) {
-    if (servers[i].conn == false) doConnect = true;
-  }
-  doConnect = false;
-}
-
+// Publish the delta for the last stop over MQTT
 void publishCount(const char* count) {
   Serial.print("People count: ");
   Serial.println(count);
@@ -322,7 +267,6 @@ void loop() {
   // If the flag "doConnect" is true then we have scanned for and found the desired
   // BLE Server with which we wish to connect.  Now we connect to it.  Once we are 
   // connected we set the connected flag to be true.
-  
   if (doConnect == true) {
     if (connectToServers()) {
       Serial.println("We are now connected to the BLE Server.");
@@ -331,24 +275,17 @@ void loop() {
     }
     doConnect = false;
   }
-  else {
-    
-    // If the flag doConnect is false check if the client is connected to all the servers, 
-    // else set the flag to true to eventually make the connection in the next iteration
-    
-    checkIfConnected();
-  }
-
-  if (doBusStop == true) {
-    if (connectToBusStop()) {
-      Serial.println("We are at a bus stop");
-      readStopId();
+  // Communicates to the servers that we are at a stop
+  if (doAnalysis == true) {
+    for (int i=0; i<actual_server; i++) {
+      if (servers[i].conn == true) {
+        String newValue = String(servers[i].value);
+        Serial.println("Setting new characteristic value to \"" + newValue + "\"");
+        // Set the characteristic's value to be the array of bytes that is actually a string.
+        servers[i].pRemoteCharacteristic2->writeValue(newValue.c_str(), newValue.length());
+      }
     }
-    else {
-      Serial.println("We have failed to connect at a bus stop");
-    }
-    doBusStop = false;
-    startVideoAnalysis();
+    doAnalysis = false;
   }
 
   // MQTT loop
@@ -357,12 +294,12 @@ void loop() {
   }
   client.loop();
 
-  int i = 0;
-  for (i=0; i<actual_server; i++) {
+  // Compute delta and publish when all servers have communicated it
+  for (int i=0; i<actual_server; i++) {
     if (servers[i].conn == true) {
-      
-      if(pRemoteCharacteristic->canRead()) {
-        std::string value = pRemoteCharacteristic->readValue();
+      // Read the value of the characteristic.
+      if(servers[i].pRemoteCharacteristic->canRead()) {
+        std::string value = servers[i].pRemoteCharacteristic->readValue();
         const char* val = value.c_str();
         Serial.print("The characteristic value is: ");
         Serial.println(val);
@@ -374,17 +311,15 @@ void loop() {
             servers[i].value = v;
             values_number++;
             delta = delta + v;
-            //publishCount(value.c_str());
           }
-          //publishPositioning(loc);
         }
         else {
-          //Device disconnection
+          //Device disconnection if the characteristic is empty
           servers[i].conn = false;
           connected_number--;
         }
       }
-      //When all the raspberry have communicated the value, publish the total sum 
+      //When all the servers have communicated the value, publish the total sum 
       if (values_number == connected_number) {
         //publish
         char deltastr[8];
@@ -393,11 +328,8 @@ void loop() {
         //publishCount(value.c_str());
       }
     }
-    //Rescan to find new devices for 1 second
-    if (i == actual_server-1) {
-      BLEDevice::getScan()->start(1);
-    }
   }
-  
+  //Rescan to find new devices for 1 second
+  BLEDevice::getScan()->start(1);
   delay(3000); // Delay 3 seconds between loops.
 } // End of loop
