@@ -9,7 +9,7 @@
 /*--- MQTT AND WIFI CONFIGURATION ---*/
 const char* ssid = "wifi-network";
 const char* passwd = "wifi-password";
-const char* mqtt_server = "mqtt-server-address";
+const char* mqtt_server = "mqtt-broker-address";
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -31,10 +31,10 @@ typedef struct {
   int value;
 } server;
 
+// Maximum number of servers
+const int servers_number = 10;
 // Servers that offer the service we are are looking for
-server servers[10];
-// Index of the last added server
-int actual_server = 0;
+server servers[servers_number];
 // Number of connected servers
 int connected_number = 0;
 // Number of servers that have communicated a value
@@ -48,21 +48,53 @@ String actual_stop = "";
 static boolean doConnect = false;
 static boolean doAnalysis = false;
 
+// Returns the index of the first free position in the servers array
+int getFirstFreeServerIndex() {
+  for (int i=0; i<servers_number; i++) {
+    if (servers[i].device == NULL) return i;
+  }
+}
 
-//Connect to the servers
+
+// Resetting device information
+void resetServer(server* s) {
+  s->device = NULL;
+  s->pRemoteCharacteristic = NULL;
+  s->pRemoteCharacteristic2 = NULL;
+  s->pClient = NULL;
+  s->pRemoteService = NULL;
+  s->conn = false;
+  s->value = -100;
+}
+
+
+// Connect to servers
 bool connectToServers() {
-  int i = 0;
-  for (i=0; i<actual_server; i++) {
-    if (servers[i].conn == false) {
+  for (int i=0; i<servers_number; i++) {
+    if (servers[i].device != NULL && servers[i].conn == false) {
       Serial.print("Forming a connection to ");
       Serial.println(servers[i].device->getAddress().toString().c_str());
       
-      servers[i].pClient  = BLEDevice::createClient();
-      Serial.println(" - Created client");
+      bool res = servers[i].pClient  = BLEDevice::createClient();
+      if (res == 1) {
+        Serial.println(" - Created client");
+      }
+      else {
+        Serial.println("Failed to create client");
+        resetServer(&servers[i]);
+        return false;
+      }
   
       // Connect to the remove BLE Server.
-      servers[i].pClient->connect(servers[i].device);  // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
-      Serial.println(" - Connected to server");
+      res = servers[i].pClient->connect(servers[i].device);  // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
+      if (res == 1) {
+        Serial.println(" - Connected to server");
+      }
+      else {
+        Serial.println("Failed to connect to server");
+        resetServer(&servers[i]);
+        return false;
+      }
   
       // Obtain a reference to the service we are after in the remote BLE server.
       servers[i].pRemoteService = servers[i].pClient->getService(serviceUUID);
@@ -70,6 +102,7 @@ bool connectToServers() {
         Serial.print("Failed to find our service UUID: ");
         Serial.println(serviceUUID.toString().c_str());
         servers[i].pClient->disconnect();
+        resetServer(&servers[i]);
         return false;
       }
       Serial.println(" - Found our service");
@@ -79,6 +112,7 @@ bool connectToServers() {
         Serial.print("Failed to find our characteristic UUID: ");
         Serial.println(charUUID.toString().c_str());
         servers[i].pClient->disconnect();
+        resetServer(&servers[i]);
         return false;
       }
       servers[i].pRemoteCharacteristic2 = servers[i].pRemoteService->getCharacteristic(charUUID2);
@@ -86,6 +120,7 @@ bool connectToServers() {
         Serial.print("Failed to find our characteristic UUID: ");
         Serial.println(charUUID2.toString().c_str());
         servers[i].pClient->disconnect();
+        resetServer(&servers[i]);
         return false;
       }
       Serial.println(" - Found our characteristics");
@@ -99,8 +134,10 @@ bool connectToServers() {
 // Check if a server is already saved
 int checkIfAlreadyPresent(BLEAdvertisedDevice* device) {
   int i = 0;
-  for (i=0; i<actual_server; i++) {
-    if (servers[i].device->getAddress().equals(device->getAddress())) return i;
+  for (i=0; i<servers_number; i++) {
+    if (servers[i].device != NULL) {
+      if (servers[i].device->getAddress().equals(device->getAddress())) return i;
+    }
   }
   return -1;
 }
@@ -117,21 +154,15 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
       //If the server offers this service and it is not already present, adds it to the servers array
       BLEAdvertisedDevice* device = new BLEAdvertisedDevice(advertisedDevice);
       int serverIndex = checkIfAlreadyPresent(device);
-      Serial.println(serverIndex);
       if (serverIndex == -1) {
+        int actual_server = getFirstFreeServerIndex();
         // Saving this server
         servers[actual_server].device = device;
         servers[actual_server].conn = false;
         //-100 is the value that represent no data
         servers[actual_server].value = -100;
-        actual_server = actual_server + 1;
         doConnect = true;
       }
-      //Trying to reconnect this device
-      else if (servers[serverIndex].conn == false) {
-        doConnect = true;
-      }
-
     } // Found our server
     // Check if we are at bus stop
     else if (advertisedDevice.getServiceDataUUID().equals(BLEUUID(beconUUID))==true) {  // found Eddystone UUID
@@ -253,9 +284,11 @@ void publishCount(const char* count) {
   client.publish("line1/bus1", json.c_str());
   int i = 0;
   //Resetting
-  for (i=0; i<actual_server; i++) {
-    servers[i].value = -100;
-    values_number--;
+  for (i=0; i<servers_number; i++) {
+    if (servers[i].device != NULL) {
+      servers[i].value = -100;
+      values_number--;
+    }
   }
   delta = 0;
   values_number = 0;
@@ -275,10 +308,11 @@ void loop() {
     }
     doConnect = false;
   }
+  
   // Communicates to the servers that we are at a stop
   if (doAnalysis == true) {
-    for (int i=0; i<actual_server; i++) {
-      if (servers[i].conn == true) {
+    for (int i=0; i<servers_number; i++) {
+      if (servers[i].device != NULL && servers[i].conn == true) {
         String newValue = String(servers[i].value);
         Serial.println("Setting new characteristic value to \"" + newValue + "\"");
         // Set the characteristic's value to be the array of bytes that is actually a string.
@@ -295,8 +329,8 @@ void loop() {
   client.loop();
 
   // Compute delta and publish when all servers have communicated it
-  for (int i=0; i<actual_server; i++) {
-    if (servers[i].conn == true) {
+  for (int i=0; i<servers_number; i++) {
+    if (servers[i].device != NULL && servers[i].conn == true) {
       // Read the value of the characteristic.
       if(servers[i].pRemoteCharacteristic->canRead()) {
         std::string value = servers[i].pRemoteCharacteristic->readValue();
@@ -315,17 +349,16 @@ void loop() {
         }
         else {
           //Device disconnection if the characteristic is empty
-          servers[i].conn = false;
+          resetServer(&servers[i]);
           connected_number--;
         }
       }
-      //When all the servers have communicated the value, publish the total sum 
-      if (values_number == connected_number) {
+      //When all the connected servers have communicated the value, publish the total sum 
+      if ((values_number > 0) && (values_number == connected_number)) {
         //publish
         char deltastr[8];
         itoa(delta, deltastr, 10);
         publishCount(deltastr);
-        //publishCount(value.c_str());
       }
     }
   }
