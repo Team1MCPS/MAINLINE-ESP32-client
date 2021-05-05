@@ -9,7 +9,7 @@
 /*--- MQTT AND WIFI CONFIGURATION ---*/
 const char* ssid = "wifi-network";
 const char* passwd = "wifi-password";
-const char* mqtt_server = "mqtt-broker-address";
+const char* mqtt_server = "mqtt-server-address";
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -53,6 +53,7 @@ int getFirstFreeServerIndex() {
   for (int i=0; i<servers_number; i++) {
     if (servers[i].device == NULL) return i;
   }
+  return -1;
 }
 
 
@@ -156,12 +157,17 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
       int serverIndex = checkIfAlreadyPresent(device);
       if (serverIndex == -1) {
         int actual_server = getFirstFreeServerIndex();
-        // Saving this server
-        servers[actual_server].device = device;
-        servers[actual_server].conn = false;
-        //-100 is the value that represent no data
-        servers[actual_server].value = -100;
-        doConnect = true;
+        if (actual_server != -1) {
+          // Saving this server
+          servers[actual_server].device = device;
+          servers[actual_server].conn = false;
+          //-100 is the value that represent no data
+          servers[actual_server].value = -100;
+          doConnect = true;
+        }
+        else {
+          Serial.println("There are too much servers at the moment");
+        }
       }
     } // Found our server
     // Check if we are at bus stop
