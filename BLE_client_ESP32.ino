@@ -9,7 +9,7 @@
 /*--- MQTT AND WIFI CONFIGURATION ---*/
 const char* ssid = "wifi-network";
 const char* passwd = "wifi-password";
-const char* mqtt_server = "mqtt-server-address";
+const char* mqtt_server = "mqtt-broker-address";
 WiFiClient espClient;
 PubSubClient client(espClient);
 
@@ -193,11 +193,13 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
           String n = String(number);
           id = id + n;
         }
-        for (int i=13;i<=strServiceData.length();i++) {
-          int number = cServiceData[i];
+        for (int i=12;i<strServiceData.length();i++) {
+          int number = (int) cServiceData[i];
           String n = String(number);
           instanceId = instanceId + n;
         }
+        int final_number = instanceId.toInt();
+        instanceId = String(final_number);
         Serial.println("Actual stop: " + instanceId);
         if (instanceId != actual_stop) {
           actual_stop = instanceId;
@@ -370,5 +372,5 @@ void loop() {
   }
   //Rescan to find new devices for 1 second
   BLEDevice::getScan()->start(1);
-  delay(3000); // Delay 3 seconds between loops.
+  delay(1000); // Delay 1 seconds between loops.
 } // End of loop
