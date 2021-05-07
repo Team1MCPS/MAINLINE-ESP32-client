@@ -106,7 +106,6 @@ bool connectToServers() {
         resetServer(&servers[i]);
         return false;
       }
-      Serial.println(" - Found our service");
       // Obtain a reference to the characteristic in the service of the remote BLE server.
       servers[i].pRemoteCharacteristic = servers[i].pRemoteService->getCharacteristic(charUUID);
       if (servers[i].pRemoteCharacteristic == nullptr) {
@@ -124,7 +123,6 @@ bool connectToServers() {
         resetServer(&servers[i]);
         return false;
       }
-      Serial.println(" - Found our characteristics");
       servers[i].conn = true;
       connected_number++;
     }
@@ -184,7 +182,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
         j++;
       }
       if (found == true) {
-        Serial.println("Found a bus stop");
+        //Serial.println("Found a stop: " + advertisedDevice->getAddress().toString().c_str());
         String id = "";
         // Instance id to know the identifier of the bus stop
         String instanceId = "";
@@ -200,8 +198,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
         }
         int final_number = instanceId.toInt();
         instanceId = String(final_number);
-        Serial.println("Actual stop: " + instanceId);
         if (instanceId != actual_stop) {
+          Serial.println("Found stop: " + instanceId);
           actual_stop = instanceId;
           // Starting the video analysis
           doAnalysis = true;
@@ -233,7 +231,7 @@ void reconnect() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting Arduino BLE Client application...");
+  Serial.println("Starting ESP32 application...");
   BLEDevice::init("");
 
   // Retrieve a Scanner and set the callback we want to use to be informed when we
@@ -285,7 +283,7 @@ void setClock () {
 
 // Publish the delta for the last stop over MQTT
 void publishCount(const char* count) {
-  Serial.print("People count: ");
+  Serial.print("Delta people: ");
   Serial.println(count);
   String deltastr = String(count);
   String json = "{\"d\":" + deltastr + ", \"s\":" + actual_stop + "}";
@@ -309,11 +307,7 @@ void loop() {
   // BLE Server with which we wish to connect.  Now we connect to it.  Once we are 
   // connected we set the connected flag to be true.
   if (doConnect == true) {
-    if (connectToServers()) {
-      Serial.println("We are now connected to the BLE Server.");
-    } else {
-      Serial.println("We have failed to connect to the server; there is nothin more we will do.");
-    }
+    connectToServers();
     doConnect = false;
   }
   
@@ -321,10 +315,9 @@ void loop() {
   if (doAnalysis == true) {
     for (int i=0; i<servers_number; i++) {
       if (servers[i].device != NULL && servers[i].conn == true) {
-        String newValue = String(servers[i].value);
-        Serial.println("Setting new characteristic value to \"" + newValue + "\"");
+        String newValue = String(1);
         // Set the characteristic's value to be the array of bytes that is actually a string.
-        servers[i].pRemoteCharacteristic2->writeValue(newValue.c_str(), newValue.length());
+        servers[i].pRemoteCharacteristic2->writeValue(newValue.c_str(), false);
       }
     }
     doAnalysis = false;
@@ -343,13 +336,13 @@ void loop() {
       if(servers[i].pRemoteCharacteristic->canRead()) {
         std::string value = servers[i].pRemoteCharacteristic->readValue();
         const char* val = value.c_str();
-        Serial.print("The characteristic value is: ");
-        Serial.println(val);
         int strLength = strlen(val);
         if (strLength > 0) {
           int v = atoi(val);
           // Checks if the delta is not '#', else the doors are closed
           if (val[0] != '#') {
+            Serial.print("The characteristic value is: ");
+            Serial.println(val);
             servers[i].value = v;
             values_number++;
             delta = delta + v;
