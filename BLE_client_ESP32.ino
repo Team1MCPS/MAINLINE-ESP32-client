@@ -1,10 +1,6 @@
 #include "BLEDevice.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <WifiLocation.h>
-
-//Command to start mosquitto with a configuration file placed in ./mosquitto/config folder: 
-// docker run -it --rm --name mosquitto -p 1883:1883 -v "$(pwd)/mosquitto/:/mosquitto/" eclipse-mosquitto
 
 /*--- MQTT AND WIFI CONFIGURATION ---*/
 const char* ssid = "wifi-network";
